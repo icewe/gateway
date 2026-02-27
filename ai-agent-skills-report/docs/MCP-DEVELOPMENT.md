@@ -1,362 +1,335 @@
-# MCP 服务器开发实战
+# MCP Server 开发实战
 
-## MCP 服务器架构
+## 项目结构
 
 ```
-┌─────────────────────────────────────────┐
-│              MCP Host                     │
-│  (Claude, Cursor, OpenAI, etc.)        │
-├─────────────────────────────────────────┤
-│                                          │
-│   ┌──────────┐    ┌───────────────┐    │
-│   │  Client  │◄───│ Protocol     │    │
-│   └──────────┘    └───────┬───────┘    │
-│                            │             │
-│                            ▼             │
-│                    ┌───────────────┐     │
-│                    │  Your Server  │    │
-│                    └───────────────┘     │
-│                            │             │
-│                            ▼             │
-│                    ┌───────────────┐     │
-│                    │ Business Logic│    │
-│                    └───────────────┘     │
-│                                          │
-└─────────────────────────────────────────┘
+mcp-my-server/
+├── src/
+│   ├── index.ts          # 入口
+│   ├── server.ts         # MCP Server
+│   ├── tools/           # 工具定义
+│   │   ├── search.ts
+│   │   ├── database.ts
+│   │   └── ...
+│   ├── resources/        # 资源定义
+│   │   └── ...
+│   └── prompts/          # 提示模板
+│       └── ...
+├── package.json
+└── tsconfig.json
 ```
 
-## TypeScript MCP 服务器
+## 基础实现
 
-### 1. 项目初始化
-
-```bash
-mkdir my-mcp-server
-cd my-mcp-server
-pnpm init
-pnpm add @modelcontextprotocol/typescript-sdk zod
-```
-
-### 2. 完整服务器实现
+### 1. Server 主体
 
 ```typescript
-// src/index.ts
-import { Server } from '@modelcontextprotocol/typescript-sdk';
-import { z } from 'zod';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { 
+  CallToolRequestSchema, 
+  ListToolsRequestSchema,
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema
+} from '@modelcontextprotocol/sdk/types.js';
 
-// 服务器配置
-const SERVER_NAME = 'my-mcp-server';
-const SERVER_VERSION = '1.0.0';
-
-// 创建服务器
-const server = new Server(
-  {
-    name: SERVER_NAME,
-    version: SERVER_VERSION
-  },
-  {
-    capabilities: {
-      tools: {},
-      resources: {},
-      prompts: {}
-    }
-  }
-);
-
-// ====== 工具处理 ======
-
-// 列出可用工具
-server.setRequestHandler('tools/list', async () => {
-  return {
-    tools: [
+class MyMCPServer {
+  constructor() {
+    this.server = new Server(
       {
-        name: 'my_tool',
-        description: '我的自定义工具',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            param1: {
-              type: 'string',
-              description: '参数1描述'
-            },
-            param2: {
-              type: 'number',
-              description: '参数2描述'
-            }
-          },
-          required: ['param1']
-        }
+        name: 'my-mcp-server',
+        version: '1.0.0'
       },
       {
-        name: 'search_data',
-        description: '搜索数据',
-        inputSchema: {
-          type: 'object',
-          properties: {
-            query: {
-              type: 'string',
-              description: '搜索关键词'
-            },
-            limit: {
-              type: 'number',
-              description: '返回结果数量',
-              default: 10
-            }
-          },
-          required: ['query']
+        capabilities: {
+          tools: {},
+          resources: {}
         }
       }
-    ]
-  };
-});
-
-// 处理工具调用
-server.setRequestHandler('tools/call', async (request) => {
-  const { name, arguments: args } = request.params;
+    );
+    
+    this.setupHandlers();
+  }
   
-  try {
-    switch (name) {
-      case 'my_tool':
-        return await handleMyTool(args);
-        
-      case 'search_data':
-        return await handleSearchData(args);
-        
-      default:
-        throw new Error(`Unknown tool: ${name}`);
-    }
-  } catch (error) {
+  setupHandlers() {
+    // 工具列表
+    this.server.setRequestHandler(ListToolsRequestSchema, async () => {
+      return {
+        tools: [
+          {
+            name: 'search',
+            description: '搜索文档',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: {
+                  type: 'string',
+                  description: '搜索关键词'
+                },
+                limit: {
+                  type: 'number',
+                  description: '返回结果数量',
+                  default: 10
+                }
+              },
+              required: ['query']
+            }
+          },
+          {
+            name: 'get_document',
+            description: '获取文档内容',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                id: {
+                  type: 'string',
+                  description: '文档 ID'
+                }
+              },
+              required: ['id']
+            }
+          }
+        ]
+      };
+    });
+    
+    // 工具调用
+    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+      const { name, arguments: args } = request.params;
+      
+      try {
+        switch (name) {
+          case 'search':
+            return await this.handleSearch(args);
+          case 'get_document':
+            return await this.handleGetDocument(args);
+          default:
+            throw new Error(`Unknown tool: ${name}`);
+        }
+      } catch (error) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Error: ${error.message}`
+            }
+          ],
+          isError: true
+        };
+      }
+    });
+    
+    // 资源列表
+    this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
+      return {
+        resources: [
+          {
+            uri: 'config://app',
+            name: 'app_config',
+            description: '应用配置',
+            mimeType: 'application/json'
+          }
+        ]
+      };
+    });
+    
+    // 资源读取
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      const { uri } = request.params;
+      
+      if (uri === 'config://app') {
+        return {
+          contents: [
+            {
+              uri,
+              mimeType: 'application/json',
+              text: JSON.stringify(this.config)
+            }
+          ]
+        };
+      }
+      
+      throw new Error(`Unknown resource: ${uri}`);
+    });
+  }
+  
+  async handleSearch(args: { query: string; limit?: number }) {
+    const results = await this.searchService.search(args.query, args.limit || 10);
+    
     return {
       content: [
         {
           type: 'text',
-          text: `Error: ${error instanceof Error ? error.message : String(error)}`
+          text: JSON.stringify(results, null, 2)
         }
-      ],
-      isError: true
+      ]
     };
   }
-});
-
-// ====== 业务逻辑 ======
-
-async function handleMyTool(args: unknown) {
-  const params = z.object({
-    param1: z.string(),
-    param2: z.number().optional()
-  }).parse(args);
   
-  // 执行业务逻辑
-  const result = {
-    message: `处理: ${params.param1}`,
-    timestamp: new Date().toISOString(),
-    data: {
-      processed: true,
-      value: params.param2 || 0
-    }
-  };
-  
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify(result, null, 2)
-      }
-    ]
-  };
-}
-
-async function handleSearchData(args: unknown) {
-  const params = z.object({
-    query: z.string(),
-    limit: z.number().default(10)
-  }).parse(args);
-  
-  // 模拟搜索
-  const results = [
-    { id: 1, title: `Result 1 for ${params.query}`, score: 0.95 },
-    { id: 2, title: `Result 2 for ${params.query}`, score: 0.85 },
-    { id: 3, title: `Result 3 for ${params.query}`, score: 0.75 }
-  ].slice(0, params.limit);
-  
-  return {
-    content: [
-      {
-        type: 'text',
-        text: JSON.stringify({ results, count: results.length }, null, 2)
-      }
-    ]
-  };
-}
-
-// ====== 资源处理 ======
-
-server.setRequestHandler('resources/list', async () => {
-  return {
-    resources: [
-      {
-        uri: 'my://data/config',
-        name: 'Configuration',
-        description: '服务器配置',
-        mimeType: 'application/json'
-      },
-      {
-        uri: 'my://data/status',
-        name: 'Status',
-        description: '服务器状态',
-        mimeType: 'application/json'
-      }
-    ]
-  };
-});
-
-server.setRequestHandler('resources/read', async (request) => {
-  const { uri } = request.params;
-  
-  switch (uri) {
-    case 'my://data/config':
-      return {
-        contents: [{
-          uri,
-          mimeType: 'application/json',
-          text: JSON.stringify({
-            server: SERVER_NAME,
-            version: SERVER_VERSION,
-            capabilities: ['tools', 'resources']
-          })
-        }]
-      };
-      
-    case 'my://data/status':
-      return {
-        contents: [{
-          uri,
-          mimeType: 'application/json',
-          text: JSON.stringify({
-            uptime: process.uptime(),
-            memory: process.memoryUsage(),
-            pid: process.pid
-          })
-        }]
-      };
-      
-    default:
-      throw new Error(`Unknown resource: ${uri}`);
+  async handleGetDocument(args: { id: string }) {
+    const doc = await this.documentService.get(args.id);
+    
+    return {
+      content: [
+        {
+          type: 'text',
+          text: doc.content
+        }
+      ]
+    };
   }
-});
-
-// ====== 启动服务器 ======
-
-// 标准输入输出模式
-process.stdin.on('data', (data) => {
-  server.handleJsonMessage(data);
-});
-
-console.error(`${SERVER_NAME} v${SERVER_VERSION} started`);
-```
-
-### 3. package.json
-
-```json
-{
-  "name": "my-mcp-server",
-  "version": "1.0.0",
-  "type": "module",
-  "bin": {
-    "my-mcp": "./dist/index.js"
-  },
-  "scripts": {
-    "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "tsc && node dist/index.js"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/typescript-sdk": "^0.5.0",
-    "zod": "^3.22.0"
-  },
-  "devDependencies": {
-    "typescript": "^5.3.0",
-    "@types/node": "^20.0.0"
+  
+  start() {
+    // stdio 传输
+    const transport = new StdioServerTransport();
+    this.server.connect(transport);
   }
 }
 ```
 
-## Python MCP 服务器
-
-```python
-# server.py
-from mcp.server import Server
-from mcp.types import Tool, TextContent
-import asyncio
-
-# 创建服务器
-app = Server("my-mcp-server")
-
-# 列出工具
-@app.list_tools()
-async def list_tools() -> list[Tool]:
-    return [
-        Tool(
-            name="calculate",
-            description="执行数学计算",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "expression": {
-                        "type": "string",
-                        "description": "数学表达式"
-                    }
-                },
-                "required": ["expression"]
-            }
-        )
-    ]
-
-# 调用工具
-@app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    if name == "calculate":
-        result = eval(arguments["expression"])
-        return [TextContent(type="text", text=str(result))]
-    
-    raise ValueError(f"Unknown tool: {name}")
-
-# 运行
-if __name__ == "__main__":
-    import sys
-    from mcp.server.stdio import stdio_server
-    
-    asyncio.run(stdio_server.run(app))
-```
-
-## MCP 客户端使用
+### 2. 搜索工具实现
 
 ```typescript
-// 客户端调用 MCP 服务器
-import { Client } from '@modelcontextprotocol/typescript-sdk';
+// src/tools/search.ts
+import { z } from 'zod';
 
-const client = new Client({
-  name: 'my-client',
-  version: '1.0.0'
-}, {
-  capabilities: {}
+export const SearchSchema = z.object({
+  query: z.string().min(1),
+  limit: z.number().min(1).max(100).default(10),
+  filters: z.object({
+    author: z.string().optional(),
+    dateFrom: z.string().optional(),
+    dateTo: z.string().optional()
+  }).optional()
 });
 
-// 连接到服务器
-await client.connect({
-  transport: 'stdio',
-  command: 'node',
-  args: ['./dist/index.js']
+export type SearchParams = z.infer<typeof SearchSchema>;
+
+export async function search(params: SearchParams) {
+  const { query, limit, filters } = params;
+  
+  // 构建查询
+  const searchQuery = {
+    q: query,
+    limit,
+    ...filters
+  };
+  
+  // 执行搜索
+  const results = await fetch('https://api.search.example.com/search', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.API_KEY}`
+    },
+    body: JSON.stringify(searchQuery)
+  });
+  
+  const data = await results.json();
+  
+  // 格式化结果
+  return {
+    total: data.total,
+    results: data.hits.map(hit => ({
+      id: hit.id,
+      title: hit.title,
+      snippet: hit.snippet,
+      score: hit.score
+    }))
+  };
+}
+```
+
+### 3. 数据库工具
+
+```typescript
+// src/tools/database.ts
+import { Pool } from 'pg';
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL
 });
 
-// 调用工具
-const result = await client.callTool({
-  name: 'my_tool',
-  arguments: { param1: 'value1', param2: 123 }
-});
+export const DatabaseSchemas = {
+  query: z.object({
+    sql: z.string().describe('SQL 查询语句')
+  }),
+  
+  execute: z.object({
+    sql: z.string().describe('SQL 执行语句')
+  }),
+  
+  list_tables: z.object({})
+};
 
-console.log(result);
+export async function executeQuery(sql: string) {
+  const result = await pool.query(sql);
+  
+  return {
+    columns: result.fields.map(f => f.name),
+    rows: result.rows,
+    rowCount: result.rowCount
+  };
+}
+
+export async function executeStatement(sql: string) {
+  const result = await pool.query(sql);
+  
+  return {
+    affectedRows: result.rowCount,
+    lastInsertId: result.insertId
+  };
+}
+
+export async function listTables() {
+  const result = await pool.query(`
+    SELECT table_name 
+    FROM information_schema.tables 
+    WHERE table_schema = 'public'
+  `);
+  
+  return {
+    tables: result.rows.map(r => r.table_name)
+  };
+}
+```
+
+## TypeScript 工具包
+
+### 类型定义
+
+```typescript
+// @modelcontextprotocol/sdk/types.js
+
+export interface Tool {
+  name: string;
+  description: string;
+  inputSchema: JSONSchema7;
+}
+
+export interface ToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface TextContent {
+  type: 'text';
+  text: string;
+}
+
+export interface Resource {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+export interface TextResourceContents {
+  uri: string;
+  mimeType: string;
+  text: string;
+}
 ```
 
 ---
 
-*MCP 开发实战 v1.0*
+*MCP Server 开发实战 v1.0*
